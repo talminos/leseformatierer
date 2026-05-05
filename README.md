@@ -68,7 +68,7 @@ python -c "from formatter import format_document; \
    ```
 3. **Start Command**:
    ```
-   gunicorn app:app
+   gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120
    ```
 4. **Environment Variables**:
    - `SECRET_KEY` – beliebiger, langer Zufallswert (Pflicht für Produktion).
@@ -93,6 +93,9 @@ genügt ein einziger Web-Service ohne Persistent Disk. Der mitgelieferte
    - **Vorhandene rote Wörter behalten** – bestehendes Rot bleibt unangetastet.
    - **Nur Absätze mit blau/fetten Triggerwörtern bearbeiten** – nützlich,
      wenn nur Kapitel mit Sprecher-Markierungen umformatiert werden sollen.
+   - **In kurze Sprecheinheiten aufteilen** – längere Absätze werden an
+     Gedankenstrichen/Satzenden in kleine Einheiten gegliedert; Zeilenabstand
+     1,15 und Abstand nach Absatz 12 pt.
 4. Auf *Formatieren & herunterladen* klicken. Die fertige Datei heißt
    `<originalname>_formatiert.docx`.
 
@@ -110,13 +113,16 @@ Pro Absatz:
    - bereits rote Wörter, falls die Option aktiv ist
 4. Aus den verbleibenden Wörtern werden Kandidaten gewählt (Mindestlänge nach
    Modus, 1–2-Buchstaben-Wörter normalerweise nicht).
-5. Pro Satz werden ungefähr **16–24 %** der geeigneten Kandidaten
-   **blau/fett**, **24–34 %** **rot**, **18–28 %** **schwarz/fett**,
+5. Pro Satz werden ungefähr **14–20 %** der geeigneten Kandidaten
+   **blau/fett**, **24–34 %** **rot**, **24–34 %** **schwarz/fett**,
    der Rest bleibt normal. Bei sehr kurzen Sätzen wird deutlich sparsamer
    markiert.
 6. Heuristik-Vorlieben:
    - Nomen, Eigennamen, Großschreibungen und lange Schlüsselbegriffe werden
      bevorzugt **blau/fett**.
+   - Blaue Hauptanker werden möglichst nicht direkt nebeneinander gesetzt.
+   - Eine anpassbare Liste bevorzugter Hauptanker kann Kundennamen und wichtige
+     Begriffe wie `Luise` oder `Flügel` gezielt stärker gewichten.
    - Satzanfang bevorzugt **schwarz/fett**.
    - Wörter direkt nach einem Gedankenstrich (`-`, `–`, `—`) bevorzugt
      rot oder schwarz/fett.
@@ -146,6 +152,9 @@ Erkanntes Blau (Hex): `0000FF`, `0070C0`, `2F5496`, `002060`.
 
 ## Bekannte Einschränkungen
 
+- Die optionale Sprecheinheiten-Funktion erzeugt kurze Abschnitte anhand von
+  Wortanzahl, Gedankenstrichen und Satzenden. Die tatsächliche Zeilenzahl kann
+  je nach Word-Seitenbreite und Schrift minimal abweichen.
 - **Kopf- und Fußzeilen** werden bewusst nicht angefasst. Wer sie ebenfalls
   formatieren möchte, müsste `app.py`/`formatter.py` um eine Section/Header-
   Iteration erweitern.
