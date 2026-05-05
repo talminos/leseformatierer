@@ -32,7 +32,9 @@ from dataclasses import dataclass
 from typing import Iterable, List, Optional, Sequence, Tuple
 
 from docx import Document
-from docx.shared import RGBColor
+from copy import deepcopy
+
+from docx.shared import Pt, RGBColor
 from docx.text.paragraph import Paragraph
 from docx.text.run import Run
 
@@ -60,9 +62,15 @@ MIN_WORD_LEN_STRICT = 4  # Modus „streng"
 # Nach dem Kundenbeispiel ist Blau nicht nur „Schutzfarbe“, sondern auch
 # Hauptanker. Bestehende blau/fette Wörter bleiben geschützt; bei reinem Text
 # erzeugen wir zusätzlich wenige blau/fette Hauptanker.
-BLUE_ANCHOR_RATIO_RANGE = (0.16, 0.24) # 16–24 % blau/fett
+BLUE_ANCHOR_RATIO_RANGE = (0.14, 0.20) # 14–20 % blau/fett, bewusst sparsamer
 RED_RATIO_RANGE = (0.24, 0.34)         # 24–34 % rot
-BLACK_BOLD_RATIO_RANGE = (0.18, 0.28)  # 18–28 % schwarz/fett
+BLACK_BOLD_RATIO_RANGE = (0.24, 0.34)  # 24–34 % schwarz/fett, etwas kräftiger
+
+# Optionale Sprecheinheiten-Layoutierung.
+SPEECH_LINE_SPACING = 1.15
+SPEECH_SPACE_AFTER_PT = 12
+SPEECH_MIN_WORDS_PER_UNIT = 8
+SPEECH_MAX_WORDS_PER_UNIT = 18
 
 # Wörter mit 1–2 Buchstaben werden i. d. R. nicht zusätzlich formatiert.
 SHORT_WORD_LEN_MAX = 2
@@ -102,6 +110,16 @@ BLUE_STOPWORDS = {
     "der", "die", "das", "dem", "den", "ein", "eine", "einen", "einem",
     "mit", "für", "von", "vom", "zum", "zur", "auf", "aus", "nach", "euch",
     "ihm", "ihn", "du", "er", "sie", "es", "so", "nur", "wohl", "kaum",
+}
+
+# Wörter, die der Kunde explizit oder exemplarisch als blaue Hauptanker erwartet.
+# Diese Liste darf später problemlos erweitert werden.
+PREFERRED_BLUE_ANCHORS = {
+    "luise", "flügel", "stelle", "messnerin", "arbeit", "familie", "liebe",
+    "verbundenheit", "bergen", "dolomiten", "garten", "lägerle",
+    "leidenschaft", "skifahren", "kindheit", "freundschaften",
+    "einzelkind", "bodenständigkeit", "anliegen", "bursche", "bäume",
+    "gelassenheit", "freunde",
 }
 
 # Triggerwort-Marker: Wenn ein Run blau UND fett ist, gilt sein Text als Trigger.
@@ -306,6 +324,8 @@ def _is_blue_anchor_candidate(tok: Token, min_len: int) -> bool:
     if tok.type != "word" or tok.locked:
         return False
     key = _word_key(tok)
+    if key in PREFERRED_BLUE_ANCHORS:
+        return True
     if key in BLUE_STOPWORDS:
         return False
     if len(tok.text) < max(min_len, 4):
@@ -445,10 +465,32 @@ def classify_candidates(
 
     # 1. Blau/fett: zentrale Hauptanker bei reinem Text erzeugen.
     blue_assigned: set[int] = set()
+    def has_adjacent_blue(i: int) -> bool:
+        """Verhindert blaue Doppelanker direkt hintereinander."""
+        if i in word_idxs:
+            pos = word_idxs.index(i)
+            for off in (-1, 1):
+                neighbour_pos = pos + off
+                if 0 <= neighbour_pos < len(word_idxs) and word_idxs[neighbour_pos] in blue_assigned:
+                    return True
+        return False
+
     for i in sorted(blue_candidates, key=blue_score, reverse=True):
         if len(blue_assigned) >= target_blue:
             break
+        if has_adjacent_blue(i) and _word_key(tokens[i]) not in PREFERRED_BLUE_ANCHORS:
+            continue
         blue_assigned.add(i)
+    # Falls durch die Nachbarschaftsregel zu wenig Blau gesetzt wurde, nur noch
+    # bevorzugte Anker auffüllen. So werden Namen/Schlüsselwörter nicht übersehen,
+    # aber blaue Ballungen bleiben selten.
+    for i in sorted(blue_candidates, key=blue_score, reverse=True):
+        if len(blue_assigned) >= target_blue:
+            break
+        if i in blue_assigned:
+            continue
+        if _word_key(tokens[i]) in PREFERRED_BLUE_ANCHORS:
+            blue_assigned.add(i)
 
     # 2. Schwarz/fett: Bevorzugt Satzanfang, Stützwörter und Gedankenstrich-Rhythmus.
     bb_assigned: set[int] = set()
@@ -603,6 +645,71 @@ def rebuild_paragraph(paragraph: Paragraph, tokens: Sequence[Token]) -> None:
     flush()
 
 
+def _apply_speech_paragraph_format(paragraph: Paragraph) -> None:
+    """Setzt die vom Kunden gewünschte Sprecheinheiten-Optik."""
+    paragraph.paragraph_format.line_spacing = SPEECH_LINE_SPACING
+    paragraph.paragraph_format.space_after = Pt(SPEECH_SPACE_AFTER_PT)
+
+
+def _insert_paragraph_after(paragraph: Paragraph) -> Paragraph:
+    """Fügt direkt nach einem Absatz einen neuen Absatz mit kopierten Absatzformaten ein."""
+    new_p = deepcopy(paragraph._p)
+    # Inhalt entfernen, Absatzformat aber behalten.
+    for child in list(new_p):
+        if child.tag.endswith("}r"):
+            new_p.remove(child)
+    paragraph._p.addnext(new_p)
+    return Paragraph(new_p, paragraph._parent)
+
+
+def _token_is_break_opportunity(tok: Token) -> bool:
+    """Geeignete Trennstellen für Sprecheinheiten."""
+    return tok.type == "punct" and (tok.text in SENTENCE_END_CHARS or tok.text in DASH_CHARS)
+
+
+def split_into_speech_units(tokens: Sequence[Token]) -> List[List[Token]]:
+    """Teilt einen Absatz in kleine Sprecheinheiten.
+
+    Word-Zeilenzahl ist ohne Layout-Engine nicht exakt berechenbar. Diese
+    Heuristik erzeugt deshalb kurze Einheiten von ca. 8–18 Wörtern und bricht
+    bevorzugt nach Gedankenstrichen oder Satzenden um.
+    """
+    units: List[List[Token]] = []
+    current: List[Token] = []
+    words = 0
+
+    for tok in tokens:
+        current.append(tok)
+        if tok.type == "word":
+            words += 1
+        if words >= SPEECH_MIN_WORDS_PER_UNIT and (
+            _token_is_break_opportunity(tok) or words >= SPEECH_MAX_WORDS_PER_UNIT
+        ):
+            units.append(current)
+            current = []
+            words = 0
+    if current:
+        units.append(current)
+    return units
+
+
+def rebuild_paragraph_as_speech_units(paragraph: Paragraph, tokens: Sequence[Token]) -> None:
+    """Baut einen Absatz optional als mehrere kurze Sprecheinheiten neu auf."""
+    units = split_into_speech_units(tokens)
+    if len(units) <= 1:
+        rebuild_paragraph(paragraph, tokens)
+        _apply_speech_paragraph_format(paragraph)
+        return
+
+    rebuild_paragraph(paragraph, units[0])
+    _apply_speech_paragraph_format(paragraph)
+    last = paragraph
+    for unit in units[1:]:
+        last = _insert_paragraph_after(last)
+        rebuild_paragraph(last, unit)
+        _apply_speech_paragraph_format(last)
+
+
 # ---------------------------------------------------------------------------
 # Haupt-Pipeline
 # ---------------------------------------------------------------------------
@@ -614,6 +721,7 @@ def _process_paragraph(
     min_len: int,
     keep_existing_red: bool,
     only_trigger_paragraphs: bool,
+    speech_units: bool,
     rng: random.Random,
 ) -> bool:
     """Verarbeitet einen einzelnen Absatz. Gibt True zurück, falls bearbeitet."""
@@ -634,7 +742,10 @@ def _process_paragraph(
     sentences = split_into_sentences(tokens)
     for sent in sentences:
         classify_candidates(tokens, sent, min_len=min_len, rng=rng)
-    rebuild_paragraph(paragraph, tokens)
+    if speech_units:
+        rebuild_paragraph_as_speech_units(paragraph, tokens)
+    else:
+        rebuild_paragraph(paragraph, tokens)
     return True
 
 
@@ -660,6 +771,7 @@ def format_document(
     mode: str = "loose",
     keep_existing_red: bool = True,
     only_trigger_paragraphs: bool = False,
+    speech_units: bool = False,
     seed: Optional[int] = None,
 ) -> dict:
     """Hauptfunktion: liest ``src_path``, formatiert und speichert nach ``dest_path``.
@@ -673,6 +785,9 @@ def format_document(
         Vorhandene rote Wörter unverändert lassen.
     only_trigger_paragraphs :
         Nur Absätze mit blau-fetten Triggerwörtern bearbeiten.
+    speech_units :
+        Lange Absätze zusätzlich in kurze Sprecheinheiten aufteilen und mit
+        1,15 Zeilenabstand sowie 12 pt Abstand nach Absatz formatieren.
     seed :
         Optionaler Zufallsseed für reproduzierbare Ergebnisse.
     """
@@ -693,6 +808,7 @@ def format_document(
             min_len=min_len,
             keep_existing_red=keep_existing_red,
             only_trigger_paragraphs=only_trigger_paragraphs,
+            speech_units=speech_units,
             rng=rng,
         ):
             processed += 1
@@ -703,6 +819,7 @@ def format_document(
             min_len=min_len,
             keep_existing_red=keep_existing_red,
             only_trigger_paragraphs=only_trigger_paragraphs,
+            speech_units=speech_units,
             rng=rng,
         ):
             processed += 1
