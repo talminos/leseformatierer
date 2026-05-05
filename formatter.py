@@ -271,6 +271,21 @@ def paragraph_to_tokens(paragraph: Paragraph, keep_existing_red: bool) -> List[T
                 # zwingend fest, damit Satzzeichen ihrem Satz folgen können.
                 if is_trigger:
                     tok.locked = True
+            # Word kann ein sichtbares Wort intern in mehrere Runs zerlegen
+            # (z. B. "Heut" + "e"). Ohne Zusammenführung würde nur ein Teil des
+            # Wortes markiert. Direkt benachbarte Wort-Tokens werden deshalb zu
+            # einem logischen Wort zusammengezogen.
+            if tokens and tokens[-1].type == "word" and tok.type == "word":
+                prev = tokens[-1]
+                prev.text += tok.text
+                if tok.locked:
+                    prev.locked = True
+                    prev.bold = tok.bold
+                    prev.color_hex = tok.color_hex
+                    prev.italic = tok.italic
+                    prev.font_name = tok.font_name
+                    prev.underline = tok.underline
+                continue
             tokens.append(tok)
     return tokens
 
