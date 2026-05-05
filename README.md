@@ -93,9 +93,13 @@ genügt ein einziger Web-Service ohne Persistent Disk. Der mitgelieferte
    - **Vorhandene rote Wörter behalten** – bestehendes Rot bleibt unangetastet.
    - **Nur Absätze mit blau/fetten Triggerwörtern bearbeiten** – nützlich,
      wenn nur Kapitel mit Sprecher-Markierungen umformatiert werden sollen.
-   - **In kurze Sprecheinheiten aufteilen** – längere Absätze werden an
-     Gedankenstrichen/Satzenden in kleine Einheiten gegliedert; Zeilenabstand
-     1,15 und Abstand nach Absatz 12 pt.
+   - **Manuskriptformat anwenden** – setzt 1,15 Zeilenabstand und 12 pt
+     Abstand nach jedem Absatz, wie in der Wunschdatei.
+   - **Redezeilen erzeugen** – längere Absätze werden an Gedankenstrichen
+     und Satzenden in kurze Lesezeilen gegliedert. Je 1–2 Zeilen bilden einen
+     Block: innerhalb des Blocks wird ein **weicher Zeilenumbruch** gesetzt,
+     zwischen den Blöcken entsteht ein **harter Absatz** mit Zeilenabstand 1,15
+     und Abstand nach Absatz 12 pt.
 4. Auf *Formatieren & herunterladen* klicken. Die fertige Datei heißt
    `<originalname>_formatiert.docx`.
 
@@ -113,8 +117,8 @@ Pro Absatz:
    - bereits rote Wörter, falls die Option aktiv ist
 4. Aus den verbleibenden Wörtern werden Kandidaten gewählt (Mindestlänge nach
    Modus, 1–2-Buchstaben-Wörter normalerweise nicht).
-5. Pro Satz werden ungefähr **14–20 %** der geeigneten Kandidaten
-   **blau/fett**, **24–34 %** **rot**, **24–34 %** **schwarz/fett**,
+5. Pro Satz werden ungefähr **22–28 %** der geeigneten Kandidaten
+   **blau/fett**, **36–44 %** **rot**, **36–44 %** **schwarz/fett**,
    der Rest bleibt normal. Bei sehr kurzen Sätzen wird deutlich sparsamer
    markiert.
 6. Heuristik-Vorlieben:
@@ -129,6 +133,7 @@ Pro Absatz:
    - Direkt nach einem blau-fetten Trigger keine Ballung.
    - Zwei rote Wörter direkt hintereinander werden nach Möglichkeit
      vermieden.
+   - Wörter unter der gewählten Mindestlänge bleiben in der Regel normal.
    - Sehr kurze Sätze (≤ 4 Kandidaten) erhalten nur 1–2 Zusatzformatierungen.
 
 Konstanten und Funktionen (`is_blue_bold_trigger`, `is_red`,
@@ -152,9 +157,11 @@ Erkanntes Blau (Hex): `0000FF`, `0070C0`, `2F5496`, `002060`.
 
 ## Bekannte Einschränkungen
 
-- Die optionale Sprecheinheiten-Funktion erzeugt kurze Abschnitte anhand von
-  Wortanzahl, Gedankenstrichen und Satzenden. Die tatsächliche Zeilenzahl kann
-  je nach Word-Seitenbreite und Schrift minimal abweichen.
+- Die optionale Redezeilen-Funktion erzeugt kurze Lesezeilen anhand von
+  Wortanzahl, Gedankenstrichen und Satzenden. Je 1–2 Zeilen werden in einem
+  harten Absatz gebündelt; innerhalb dieses Absatzes werden weiche
+  Zeilenumbrüche gesetzt. Die tatsächliche Zeilenzahl kann je nach
+  Word-Seitenbreite und Schrift minimal abweichen.
 - **Kopf- und Fußzeilen** werden bewusst nicht angefasst. Wer sie ebenfalls
   formatieren möchte, müsste `app.py`/`formatter.py` um eine Section/Header-
   Iteration erweitern.
