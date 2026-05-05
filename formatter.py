@@ -34,6 +34,7 @@ from typing import Iterable, List, Optional, Sequence, Tuple
 from docx import Document
 from copy import deepcopy
 
+from docx.enum.text import WD_BREAK
 from docx.shared import Pt, RGBColor
 from docx.text.paragraph import Paragraph
 from docx.text.run import Run
@@ -62,15 +63,16 @@ MIN_WORD_LEN_STRICT = 4  # Modus „streng"
 # Nach dem Kundenbeispiel ist Blau nicht nur „Schutzfarbe“, sondern auch
 # Hauptanker. Bestehende blau/fette Wörter bleiben geschützt; bei reinem Text
 # erzeugen wir zusätzlich wenige blau/fette Hauptanker.
-BLUE_ANCHOR_RATIO_RANGE = (0.14, 0.20) # 14–20 % blau/fett, bewusst sparsamer
-RED_RATIO_RANGE = (0.24, 0.34)         # 24–34 % rot
-BLACK_BOLD_RATIO_RANGE = (0.24, 0.34)  # 24–34 % schwarz/fett, etwas kräftiger
+BLUE_ANCHOR_RATIO_RANGE = (0.22, 0.28) # Hauptanker dichter, aber weiterhin geschützt
+RED_RATIO_RANGE = (0.36, 0.44)         # Blickführung auf geeigneten Wörtern ab 4 Buchstaben
+BLACK_BOLD_RATIO_RANGE = (0.36, 0.44)  # Stützwörter kräftiger, ohne kurze Füllwörter
 
-# Optionale Sprecheinheiten-Layoutierung.
+# Optionale Redezeilen-/Sprecheinheiten-Layoutierung.
 SPEECH_LINE_SPACING = 1.15
 SPEECH_SPACE_AFTER_PT = 12
-SPEECH_MIN_WORDS_PER_UNIT = 8
-SPEECH_MAX_WORDS_PER_UNIT = 18
+SPEECH_MIN_WORDS_PER_LINE = 5
+SPEECH_MAX_WORDS_PER_LINE = 13
+SPEECH_MAX_LINES_PER_BLOCK = 2
 
 # Wörter mit 1–2 Buchstaben werden i. d. R. nicht zusätzlich formatiert.
 SHORT_WORD_LEN_MAX = 2
@@ -306,7 +308,7 @@ def _eligible_word(tok: Token, min_len: int) -> bool:
     """Wort ist Kandidat, wenn es lang genug und nicht gesperrt ist."""
     if tok.type != "word" or tok.locked:
         return False
-    return len(tok.text) >= min_len or tok.text.lower() in SHORT_MARKABLE_WORDS
+    return len(tok.text) >= min_len
 
 
 def _word_key(tok_or_text: Token | str) -> str:
@@ -492,6 +494,24 @@ def classify_candidates(
         if _word_key(tokens[i]) in PREFERRED_BLUE_ANCHORS:
             blue_assigned.add(i)
 
+    def has_adjacent_word(i: int, assigned: set[int]) -> bool:
+        """Prüft direkte Nachbarschaft in der Wortfolge, nicht im Roh-Tokenstrom."""
+        if i not in word_idxs:
+            return False
+        pos = word_idxs.index(i)
+        for off in (-1, 1):
+            neighbour_pos = pos + off
+            if 0 <= neighbour_pos < len(word_idxs) and word_idxs[neighbour_pos] in assigned:
+                return True
+        return False
+
+    def has_adjacent_strong(i: int, *groups: set[int]) -> bool:
+        """Verhindert sichtbare Markierungsballungen direkt nebeneinander."""
+        combined: set[int] = set()
+        for group in groups:
+            combined.update(group)
+        return has_adjacent_word(i, combined)
+
     # 2. Schwarz/fett: Bevorzugt Satzanfang, Stützwörter und Gedankenstrich-Rhythmus.
     bb_assigned: set[int] = set()
     if sentence_start_idx in word_idxs and sentence_start_idx not in blue_assigned and target_black_bold > 0:
@@ -501,6 +521,8 @@ def classify_candidates(
             break
         if i in bb_assigned or i in blue_assigned:
             continue
+        if has_adjacent_word(i, bb_assigned):
+            continue
         if i in after_dash:
             bb_assigned.add(i)
     for i in sorted(word_idxs, key=black_score, reverse=True):
@@ -508,9 +530,11 @@ def classify_candidates(
             break
         if i in bb_assigned or i in blue_assigned:
             continue
+        if has_adjacent_word(i, bb_assigned):
+            continue
         bb_assigned.add(i)
 
-    # 3. Rot: aus den verbleibenden Kandidaten, ohne direkte Nachbarschaft.
+    # 3. Rot: aus den verbleibenden Kandidaten, ohne direkte Rot-Nachbarschaft.
     remaining = [
         i for i in sorted(word_idxs, key=red_score, reverse=True)
         if i not in bb_assigned and i not in blue_assigned
@@ -537,11 +561,27 @@ def classify_candidates(
         if red_neighbour(i):
             continue
         red_assigned.add(i)
-    # Falls wir wegen Nachbarschafts-Regel zu wenig haben, fülle weniger streng auf.
+    # Falls wir wegen der Ballungsregeln zu wenig haben, fülle nur ohne direkte
+    # Rot-Nachbarschaft auf. Andere Farben dürfen angrenzen, weil der Kunde
+    # gerade starke optische Wechsel braucht.
+    soft_target_red = target_red
     for i in remaining:
-        if len(red_assigned) >= target_red:
+        if len(red_assigned) >= soft_target_red:
             break
+        if i in red_assigned:
+            continue
+        if red_neighbour(i):
+            continue
         red_assigned.add(i)
+
+    # Abschluss-Sanierung: Keine direkte Schwarz/Fett- oder Rot-Nachbarschaft.
+    # Farbliche Wechsel dürfen dicht stehen, weil sie dem Lidschlag-Prinzip helfen.
+    for pos in range(len(word_idxs) - 1):
+        left, right = word_idxs[pos], word_idxs[pos + 1]
+        if left in bb_assigned and right in bb_assigned:
+            bb_assigned.remove(right)
+        if left in red_assigned and right in red_assigned:
+            red_assigned.remove(right)
 
     # Anwenden auf die Tokens.
     for i in blue_assigned:
@@ -602,14 +642,8 @@ def _apply_token_to_run(run: Run, tok: Token) -> None:
             pass
 
 
-def rebuild_paragraph(paragraph: Paragraph, tokens: Sequence[Token]) -> None:
-    """Baut den Absatz aus der Token-Liste neu auf.
-
-    Aufeinanderfolgende Tokens mit identischer Formatierung werden zu einem
-    Run zusammengefasst, damit das Ergebnis kompakt bleibt.
-    """
-    _clear_paragraph_runs(paragraph)
-
+def _add_tokens_to_paragraph(paragraph: Paragraph, tokens: Sequence[Token]) -> None:
+    """Hängt Tokens als formatierte Runs an einen Absatz an."""
     def signature(t: Token) -> tuple:
         # Whitespace und Satzzeichen erben Formatierung des umgebenden Worts nicht.
         if t.type != "word":
@@ -645,8 +679,48 @@ def rebuild_paragraph(paragraph: Paragraph, tokens: Sequence[Token]) -> None:
     flush()
 
 
+def rebuild_paragraph(paragraph: Paragraph, tokens: Sequence[Token]) -> None:
+    """Baut den Absatz aus der Token-Liste neu auf.
+
+    Aufeinanderfolgende Tokens mit identischer Formatierung werden zu einem
+    Run zusammengefasst, damit das Ergebnis kompakt bleibt.
+    """
+    _clear_paragraph_runs(paragraph)
+    _add_tokens_to_paragraph(paragraph, tokens)
+
+
+def _count_words(tokens: Sequence[Token]) -> int:
+    """Zählt Wort-Tokens in einer Tokenfolge."""
+    return sum(1 for tok in tokens if tok.type == "word")
+
+
+def _trim_outer_spaces(tokens: Sequence[Token]) -> List[Token]:
+    """Entfernt reine Rand-Leerzeichen nach künstlichen Umbrüchen."""
+    out = list(tokens)
+    while out and out[0].type == "space":
+        out.pop(0)
+    while out and out[-1].type == "space":
+        out.pop()
+    return out
+
+
+def rebuild_paragraph_with_soft_lines(paragraph: Paragraph, lines: Sequence[Sequence[Token]]) -> None:
+    """Baut einen Absatz mit weichen Zeilenumbrüchen zwischen den Zeilen."""
+    _clear_paragraph_runs(paragraph)
+    for line_index, line_tokens in enumerate(lines):
+        if line_index > 0:
+            paragraph.add_run().add_break(WD_BREAK.LINE)
+        _add_tokens_to_paragraph(paragraph, line_tokens)
+
+
 def _apply_speech_paragraph_format(paragraph: Paragraph) -> None:
     """Setzt die vom Kunden gewünschte Sprecheinheiten-Optik."""
+    paragraph.paragraph_format.line_spacing = SPEECH_LINE_SPACING
+    paragraph.paragraph_format.space_after = Pt(SPEECH_SPACE_AFTER_PT)
+
+
+def _apply_manuscript_paragraph_format(paragraph: Paragraph) -> None:
+    """Setzt das Grundlayout aus der Wunschdatei: 1,15 und 12 pt Abstand."""
     paragraph.paragraph_format.line_spacing = SPEECH_LINE_SPACING
     paragraph.paragraph_format.space_after = Pt(SPEECH_SPACE_AFTER_PT)
 
@@ -667,14 +741,14 @@ def _token_is_break_opportunity(tok: Token) -> bool:
     return tok.type == "punct" and (tok.text in SENTENCE_END_CHARS or tok.text in DASH_CHARS)
 
 
-def split_into_speech_units(tokens: Sequence[Token]) -> List[List[Token]]:
-    """Teilt einen Absatz in kleine Sprecheinheiten.
+def split_into_speech_lines(tokens: Sequence[Token]) -> List[List[Token]]:
+    """Teilt einen Absatz in kurze Redezeilen.
 
     Word-Zeilenzahl ist ohne Layout-Engine nicht exakt berechenbar. Diese
-    Heuristik erzeugt deshalb kurze Einheiten von ca. 8–18 Wörtern und bricht
+    Heuristik erzeugt deshalb kurze Zeilen von ca. 5–13 Wörtern und bricht
     bevorzugt nach Gedankenstrichen oder Satzenden um.
     """
-    units: List[List[Token]] = []
+    lines: List[List[Token]] = []
     current: List[Token] = []
     words = 0
 
@@ -682,31 +756,59 @@ def split_into_speech_units(tokens: Sequence[Token]) -> List[List[Token]]:
         current.append(tok)
         if tok.type == "word":
             words += 1
-        if words >= SPEECH_MIN_WORDS_PER_UNIT and (
-            _token_is_break_opportunity(tok) or words >= SPEECH_MAX_WORDS_PER_UNIT
+        # Der Gedankenstrich ist im Rede-Manuskript ein natürlicher Schnitt.
+        # Wir nutzen ihn ab der Mindestlänge; Satzenden zählen ebenfalls.
+        if (
+            (words >= SPEECH_MIN_WORDS_PER_LINE and _token_is_break_opportunity(tok))
+            or words >= SPEECH_MAX_WORDS_PER_LINE
         ):
-            units.append(current)
+            lines.append(_trim_outer_spaces(current))
             current = []
             words = 0
     if current:
-        units.append(current)
-    return units
+        lines.append(_trim_outer_spaces(current))
+    return [line for line in lines if line]
+
+
+def group_speech_lines(lines: Sequence[Sequence[Token]]) -> List[List[List[Token]]]:
+    """Bündelt Redezeilen zu Absätzen.
+
+    Je Block entstehen 1–2 sichtbare Zeilen: Die Zeilen im Block werden mit
+    weichem Word-Umbruch verbunden; zwischen den Blöcken kommt ein harter
+    Absatz mit 12 pt Abstand. Dadurch entsteht die Optik aus dem Screenshot,
+    ohne dass jede einzelne Zeile 12 pt Abstand bekommt.
+    """
+    blocks: List[List[List[Token]]] = []
+    current: List[List[Token]] = []
+    for line in lines:
+        current.append(list(line))
+        if len(current) >= SPEECH_MAX_LINES_PER_BLOCK:
+            blocks.append(current)
+            current = []
+    if current:
+        blocks.append(current)
+    return blocks
 
 
 def rebuild_paragraph_as_speech_units(paragraph: Paragraph, tokens: Sequence[Token]) -> None:
-    """Baut einen Absatz optional als mehrere kurze Sprecheinheiten neu auf."""
-    units = split_into_speech_units(tokens)
-    if len(units) <= 1:
-        rebuild_paragraph(paragraph, tokens)
+    """Baut einen Absatz als Sprecheinheiten neu auf.
+
+    Jede Redezeilen-Gruppe wird ein harter Word-Absatz mit 12 pt Abstand danach.
+    Innerhalb dieser Gruppe stehen 1–2 Zeilen per weichem Zeilenumbruch.
+    """
+    lines = split_into_speech_lines(tokens)
+    blocks = group_speech_lines(lines)
+    if len(blocks) <= 1:
+        rebuild_paragraph_with_soft_lines(paragraph, blocks[0] if blocks else [tokens])
         _apply_speech_paragraph_format(paragraph)
         return
 
-    rebuild_paragraph(paragraph, units[0])
+    rebuild_paragraph_with_soft_lines(paragraph, blocks[0])
     _apply_speech_paragraph_format(paragraph)
     last = paragraph
-    for unit in units[1:]:
+    for block in blocks[1:]:
         last = _insert_paragraph_after(last)
-        rebuild_paragraph(last, unit)
+        rebuild_paragraph_with_soft_lines(last, block)
         _apply_speech_paragraph_format(last)
 
 
@@ -722,6 +824,7 @@ def _process_paragraph(
     keep_existing_red: bool,
     only_trigger_paragraphs: bool,
     speech_units: bool,
+    manuscript_layout: bool,
     rng: random.Random,
 ) -> bool:
     """Verarbeitet einen einzelnen Absatz. Gibt True zurück, falls bearbeitet."""
@@ -746,6 +849,8 @@ def _process_paragraph(
         rebuild_paragraph_as_speech_units(paragraph, tokens)
     else:
         rebuild_paragraph(paragraph, tokens)
+        if manuscript_layout:
+            _apply_manuscript_paragraph_format(paragraph)
     return True
 
 
@@ -772,6 +877,7 @@ def format_document(
     keep_existing_red: bool = True,
     only_trigger_paragraphs: bool = False,
     speech_units: bool = False,
+    manuscript_layout: bool = True,
     seed: Optional[int] = None,
 ) -> dict:
     """Hauptfunktion: liest ``src_path``, formatiert und speichert nach ``dest_path``.
@@ -788,6 +894,9 @@ def format_document(
     speech_units :
         Lange Absätze zusätzlich in kurze Sprecheinheiten aufteilen und mit
         1,15 Zeilenabstand sowie 12 pt Abstand nach Absatz formatieren.
+    manuscript_layout :
+        Grundlayout mit 1,15 Zeilenabstand und 12 pt Abstand nach Absatz
+        anwenden, auch wenn keine Redezeilen erzeugt werden.
     seed :
         Optionaler Zufallsseed für reproduzierbare Ergebnisse.
     """
@@ -809,6 +918,7 @@ def format_document(
             keep_existing_red=keep_existing_red,
             only_trigger_paragraphs=only_trigger_paragraphs,
             speech_units=speech_units,
+            manuscript_layout=manuscript_layout,
             rng=rng,
         ):
             processed += 1
@@ -820,6 +930,7 @@ def format_document(
             keep_existing_red=keep_existing_red,
             only_trigger_paragraphs=only_trigger_paragraphs,
             speech_units=speech_units,
+            manuscript_layout=manuscript_layout,
             rng=rng,
         ):
             processed += 1
