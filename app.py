@@ -105,6 +105,7 @@ def create_app() -> Flask:
         mode = "strict" if mode_raw == "strict" else "loose"
         keep_existing_red = request.form.get("keep_existing_red") == "on"
         only_trigger_paragraphs = request.form.get("only_trigger_paragraphs") == "on"
+        speech_units = request.form.get("speech_units") == "on"
 
         # Eindeutige Job-ID
         job_id = uuid.uuid4().hex
@@ -137,6 +138,7 @@ def create_app() -> Flask:
                 mode=mode,
                 keep_existing_red=keep_existing_red,
                 only_trigger_paragraphs=only_trigger_paragraphs,
+                speech_units=speech_units,
             )
         except Exception:  # noqa: BLE001
             logger.exception("Formatierung fehlgeschlagen (Job %s)", job_id)
