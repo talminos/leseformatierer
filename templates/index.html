@@ -174,14 +174,14 @@
         <span class="label">Modus</span>
         <div class="radio-group">
           <label>
-            <input type="radio" name="mode" value="loose" checked>
+            <input type="radio" name="mode" value="loose">
             <strong>Beispielnah</strong><br>
             <small>Wörter ab 3 Buchstaben werden formatiert.</small>
           </label>
           <label>
-            <input type="radio" name="mode" value="strict">
-            <strong>Streng</strong><br>
-            <small>Nur Wörter ab 4 Buchstaben werden formatiert.</small>
+            <input type="radio" name="mode" value="strict" checked>
+            <strong>Streng / Kundenmodus</strong><br>
+            <small>Nur Wörter ab 4 Buchstaben werden formatiert. Empfohlen.</small>
           </label>
         </div>
       </div>
@@ -196,8 +196,12 @@
           <span>Nur Absätze mit <span style="color:#0000ff;font-weight:bold">blau/fetten Triggerwörtern</span> bearbeiten.</span>
         </label>
         <label class="check">
+          <input type="checkbox" name="manuscript_layout" checked>
+          <span>Manuskriptformat anwenden (1,15 Zeilenabstand und 12&nbsp;pt Abstand nach jedem Absatz).</span>
+        </label>
+        <label class="check">
           <input type="checkbox" name="speech_units">
-          <span>Zusätzlich in kurze Sprecheinheiten aufteilen (ca. 2 Zeilen, 1,15 Zeilenabstand, 12&nbsp;pt Abstand).</span>
+          <span>Redezeilen erzeugen (1–2 kurze Zeilen pro Block, weicher Umbruch innerhalb des Blocks, 12&nbsp;pt Abstand zwischen Blöcken).</span>
         </label>
       </div>
 
@@ -223,4 +227,3 @@
   </main>
 </body>
 </html>
-
