@@ -745,26 +745,40 @@ def split_into_speech_lines(tokens: Sequence[Token]) -> List[List[Token]]:
     """Teilt einen Absatz in kurze Redezeilen.
 
     Word-Zeilenzahl ist ohne Layout-Engine nicht exakt berechenbar. Diese
-    Heuristik erzeugt deshalb kurze Zeilen von ca. 5–13 Wörtern und bricht
-    bevorzugt nach Gedankenstrichen oder Satzenden um.
+    Heuristik erzeugt deshalb kurze Zeilen und bricht nur an semantisch
+    vertretbaren Stellen: nach Gedankenstrichen oder Satzenden. Kommas bleiben
+    ausdrücklich innerhalb derselben Sprecheinheit, damit kein Absatz mit
+    Komma, Punkt oder einem losgelösten Nebensatz beginnt.
     """
     lines: List[List[Token]] = []
     current: List[Token] = []
     words = 0
+    overdue = False
 
     for tok in tokens:
         current.append(tok)
         if tok.type == "word":
             words += 1
-        # Der Gedankenstrich ist im Rede-Manuskript ein natürlicher Schnitt.
-        # Wir nutzen ihn ab der Mindestlänge; Satzenden zählen ebenfalls.
-        if (
-            (words >= SPEECH_MIN_WORDS_PER_LINE and _token_is_break_opportunity(tok))
-            or words >= SPEECH_MAX_WORDS_PER_LINE
-        ):
+            if words >= SPEECH_MAX_WORDS_PER_LINE:
+                overdue = True
+
+        # Der Gedankenstrich und Satzenden sind natürliche Schnittstellen.
+        # Auch wenn eine Zeile länger wird, warten wir auf so eine Schnittstelle,
+        # statt mitten im Satz oder direkt vor/nach einem Komma zu trennen.
+        if words >= SPEECH_MIN_WORDS_PER_LINE and _token_is_break_opportunity(tok):
             lines.append(_trim_outer_spaces(current))
             current = []
             words = 0
+            overdue = False
+
+        # Sicherheitsventil für extrem lange Sätze ohne jeden Gedankenstrich
+        # oder Punkt: lieber eine zu lange Einheit als hässliche Komma-Brüche.
+        # Erst ab sehr hoher Überlänge brechen wir nach dem nächsten Wort.
+        elif overdue and words >= SPEECH_MAX_WORDS_PER_LINE * 2 and tok.type == "word":
+            lines.append(_trim_outer_spaces(current))
+            current = []
+            words = 0
+            overdue = False
     if current:
         lines.append(_trim_outer_spaces(current))
     return [line for line in lines if line]
