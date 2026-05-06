@@ -93,8 +93,9 @@ genügt ein einziger Web-Service ohne Persistent Disk. Der mitgelieferte
    - **Vorhandene rote Wörter behalten** – bestehendes Rot bleibt unangetastet.
    - **Nur Absätze mit blau/fetten Triggerwörtern bearbeiten** – nützlich,
      wenn nur Kapitel mit Sprecher-Markierungen umformatiert werden sollen.
-   - **Manuskriptformat anwenden** – setzt 1,15 Zeilenabstand und 12 pt
-     Abstand nach jedem Absatz, wie in der Wunschdatei.
+   - **Manuskriptformat anwenden** – setzt Papierformat 30 × 22 cm,
+     umlaufende Ränder 0,7 cm, 1,15 Zeilenabstand und 12 pt Abstand nach
+     jedem Absatz, wie in der Wunschdatei.
    - **Redezeilen erzeugen** – längere Absätze werden an Gedankenstrichen
      und Satzenden in kurze Lesezeilen gegliedert. Je 1–2 Zeilen bilden einen
      Block: innerhalb des Blocks wird ein **weicher Zeilenumbruch** gesetzt,
@@ -115,6 +116,7 @@ Pro Absatz:
 3. **Gesperrte** Tokens werden niemals überschrieben:
    - blau + fett (Triggerwörter, z. B. „PAUSE", „D.")
    - bereits rote Wörter, falls die Option aktiv ist
+   - grün + fett (Kommentare/offene Fragen)
 4. Aus den verbleibenden Wörtern werden Kandidaten gewählt (Mindestlänge nach
    Modus, 1–2-Buchstaben-Wörter normalerweise nicht).
 5. Pro Satz werden ungefähr **22–28 %** der geeigneten Kandidaten
@@ -124,6 +126,8 @@ Pro Absatz:
 6. Heuristik-Vorlieben:
    - Nomen, Eigennamen, Großschreibungen und lange Schlüsselbegriffe werden
      bevorzugt **blau/fett**.
+   - Jahreszahlen und bevorzugte Namen werden als starke blaue Trigger
+     behandelt.
    - Blaue Hauptanker werden möglichst nicht direkt nebeneinander gesetzt.
    - Eine anpassbare Liste bevorzugter Hauptanker kann Kundennamen und wichtige
      Begriffe wie `Luise` oder `Flügel` gezielt stärker gewichten.
@@ -141,6 +145,17 @@ Konstanten und Funktionen (`is_blue_bold_trigger`, `is_red`,
 oben in `formatter.py` und sind kommentiert.
 
 Erkanntes Blau (Hex): `0000FF`, `0070C0`, `2F5496`, `002060`.
+
+Sternchen-Einschübe wie
+
+```text
+*****************************************************
+Intro: Andreas Gabalier…
+*****************************************************
+```
+
+werden von der normalen Wortmarkierung ausgenommen und mit einfachem
+Zeilenabstand, fett und mittig formatiert.
 
 ---
 
