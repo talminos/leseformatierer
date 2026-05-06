@@ -127,8 +127,8 @@ Pro Absatz:
    - Nomen, Eigennamen, Großschreibungen und lange Schlüsselbegriffe werden
      bevorzugt **blau/fett**.
    - Jahreszahlen, ausgeschriebene Datumsangaben wie `30. März 2026`,
-     Altersangaben wie `13 Jahren` und bevorzugte Namen werden als starke
-     blaue Trigger behandelt.
+     Altersangaben wie `13 Jahren`, Uhrzeiten wie `9 Uhr` oder `9:30 Uhr`
+     und bevorzugte Namen werden als starke blaue Trigger behandelt.
    - Blaue Hauptanker werden möglichst nicht direkt nebeneinander gesetzt.
    - Eine anpassbare Liste bevorzugter Hauptanker kann Kundennamen und wichtige
      Begriffe wie `Luise` oder `Flügel` gezielt stärker gewichten.
