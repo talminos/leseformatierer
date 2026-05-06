@@ -93,7 +93,7 @@ genügt ein einziger Web-Service ohne Persistent Disk. Der mitgelieferte
    - **Vorhandene rote Wörter behalten** – bestehendes Rot bleibt unangetastet.
    - **Nur Absätze mit blau/fetten Triggerwörtern bearbeiten** – nützlich,
      wenn nur Kapitel mit Sprecher-Markierungen umformatiert werden sollen.
-   - **Manuskriptformat anwenden** – setzt Papierformat 30 × 22 cm,
+   - **Manuskriptformat anwenden** – setzt Papierformat 30 cm breit × 22 cm hoch,
      umlaufende Ränder 0,7 cm, 1,15 Zeilenabstand und 12 pt Abstand nach
      jedem Absatz, wie in der Wunschdatei.
    - **Redezeilen erzeugen** – längere Absätze werden an Gedankenstrichen
@@ -126,8 +126,9 @@ Pro Absatz:
 6. Heuristik-Vorlieben:
    - Nomen, Eigennamen, Großschreibungen und lange Schlüsselbegriffe werden
      bevorzugt **blau/fett**.
-   - Jahreszahlen und bevorzugte Namen werden als starke blaue Trigger
-     behandelt.
+   - Jahreszahlen, ausgeschriebene Datumsangaben wie `30. März 2026`,
+     Altersangaben wie `13 Jahren` und bevorzugte Namen werden als starke
+     blaue Trigger behandelt.
    - Blaue Hauptanker werden möglichst nicht direkt nebeneinander gesetzt.
    - Eine anpassbare Liste bevorzugter Hauptanker kann Kundennamen und wichtige
      Begriffe wie `Luise` oder `Flügel` gezielt stärker gewichten.
@@ -155,7 +156,8 @@ Intro: Andreas Gabalier…
 ```
 
 werden von der normalen Wortmarkierung ausgenommen und mit einfachem
-Zeilenabstand, fett und mittig formatiert.
+Zeilenabstand, fett und mittig formatiert. Die Rubrikzeile, z. B. `Intro:`,
+wird auf 16 pt gesetzt.
 
 ---
 
