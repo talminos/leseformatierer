@@ -145,6 +145,8 @@ AGE_UNIT_WORDS = {
     "jahr", "jahre", "jahren", "jährig", "jährige", "jährigen", "jähriger",
 }
 
+TIME_UNIT_WORDS = {"uhr"}
+
 # Triggerwort-Marker: Wenn ein Run blau UND fett ist, gilt sein Text als Trigger.
 # Wir „ballen" danach nicht alles direkt mit roten Wörtern.
 
@@ -392,6 +394,11 @@ def _is_age_unit_word(text: str) -> bool:
     return _word_key(text) in AGE_UNIT_WORDS
 
 
+def _is_time_unit_word(text: str) -> bool:
+    """Erkennt Uhrzeit-Einheiten."""
+    return _word_key(text) in TIME_UNIT_WORDS
+
+
 def _looks_like_name(tok: Token, token_idx: int, sentence_start_idx: Optional[int]) -> bool:
     """Einfache Namens-Heuristik ohne KI.
 
@@ -464,6 +471,10 @@ def classify_candidates(
     * Nach einem blau-fett-Triggerwort wird die nächste Ballung gemieden.
     * Zwei rote Wörter direkt hintereinander vermeiden, wenn möglich.
     """
+    all_word_idxs = [
+        i for i in sentence_indices
+        if tokens[i].type == "word" and not tokens[i].locked
+    ]
     word_idxs = [i for i in sentence_indices if _eligible_word(tokens[i], min_len)]
     n = len(word_idxs)
     if n == 0:
@@ -574,23 +585,57 @@ def classify_candidates(
     blue_assigned: set[int] = set()
     def near_number_word(i: int, radius: int = 2) -> bool:
         """Prüft, ob in der Wortfolge nahe bei i eine Zahl/Jahreszahl steht."""
-        if i not in word_idxs:
+        if i not in all_word_idxs:
             return False
-        pos = word_idxs.index(i)
-        for other_pos in range(max(0, pos - radius), min(len(word_idxs), pos + radius + 1)):
+        pos = all_word_idxs.index(i)
+        for other_pos in range(max(0, pos - radius), min(len(all_word_idxs), pos + radius + 1)):
             if other_pos == pos:
                 continue
-            if _is_year_or_number(tokens[word_idxs[other_pos]].text):
+            other_text = tokens[all_word_idxs[other_pos]].text
+            if _is_year_or_number(other_text) or other_text.isdigit():
                 return True
         return False
 
+    def near_time_unit_word(i: int, radius: int = 2) -> bool:
+        """Prüft, ob nahe bei einer Zahl das Wort „Uhr“ steht."""
+        if i not in all_word_idxs:
+            return False
+        pos = all_word_idxs.index(i)
+        for other_pos in range(max(0, pos - radius), min(len(all_word_idxs), pos + radius + 1)):
+            if other_pos == pos:
+                continue
+            if _is_time_unit_word(tokens[all_word_idxs[other_pos]].text):
+                return True
+        return False
+
+    def is_clock_number(i: int) -> bool:
+        """Erkennt Zahlenbestandteile von Uhrzeiten, auch einstellige Stunden."""
+        tok = tokens[i]
+        if tok.type != "word" or not tok.text.isdigit():
+            return False
+        value = int(tok.text)
+        if near_time_unit_word(i, radius=2) and 0 <= value <= 59:
+            return True
+        # Uhrzeit mit Doppelpunkt, z. B. 9:30 oder 10:15, auch ohne „Uhr“.
+        prev_tok = tokens[i - 1] if i - 1 >= 0 else None
+        next_tok = tokens[i + 1] if i + 1 < len(tokens) else None
+        if (
+            ((prev_tok and prev_tok.type == "punct" and prev_tok.text == ":")
+             or (next_tok and next_tok.type == "punct" and next_tok.text == ":"))
+            and 0 <= value <= 59
+        ):
+            return True
+        return False
+
     mandatory_blue = {
-        i for i in word_idxs
+        i for i in all_word_idxs
         if (
             _is_year_or_number(tokens[i].text)
+            or is_clock_number(i)
             or _word_key(tokens[i]) in PREFERRED_BLUE_ANCHORS
             or (_is_month_name(tokens[i].text) and near_number_word(i, radius=2))
             or (_is_age_unit_word(tokens[i].text) and near_number_word(i, radius=1))
+            or (_is_time_unit_word(tokens[i].text) and near_number_word(i, radius=2))
         )
     }
     if mandatory_blue:
