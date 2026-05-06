@@ -34,8 +34,8 @@ from typing import Iterable, List, Optional, Sequence, Tuple
 from docx import Document
 from copy import deepcopy
 
-from docx.enum.text import WD_BREAK
-from docx.shared import Pt, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
+from docx.shared import Cm, Pt, RGBColor
 from docx.text.paragraph import Paragraph
 from docx.text.run import Run
 
@@ -50,10 +50,18 @@ BLUE_HEX_VALUES = {"0000FF", "0070C0", "2F5496", "002060"}
 # Farben, die als „rot" gewertet werden.
 RED_HEX_VALUES = {"FF0000", "C00000", "FF2D2D"}
 
+# Grün/fett wird als Kommentar-/Frage-Markierung des Kunden geschützt.
+GREEN_HEX_VALUES = {"00B050", "008000", "00843D", "00A000", "70AD47", "548235"}
+
 # Zielfarben, die der Formatierer schreibt.
 RED_RGB = RGBColor(0xFF, 0x00, 0x00)        # Rot für rot markierte Wörter
 BLUE_RGB = RGBColor(0x00, 0x00, 0xFF)       # Blau (nur falls Trigger neu erzeugt)
 BLACK_RGB = RGBColor(0x00, 0x00, 0x00)      # Schwarz (Standard)
+
+# Papierformat aus Kundenwunsch: 30 cm hoch x 22 cm breit, umlaufend 0,7 cm.
+PAGE_WIDTH_CM = 22.0
+PAGE_HEIGHT_CM = 30.0
+PAGE_MARGIN_CM = 0.7
 
 # Mindestlänge eines Worts, um überhaupt für rot/fett-schwarz infrage zu kommen.
 MIN_WORD_LEN_LOOSE = 3   # Modus „beispielnah"
@@ -117,6 +125,7 @@ BLUE_STOPWORDS = {
 # Wörter, die der Kunde explizit oder exemplarisch als blaue Hauptanker erwartet.
 # Diese Liste darf später problemlos erweitert werden.
 PREFERRED_BLUE_ANCHORS = {
+    "andreas", "karl",
     "luise", "flügel", "stelle", "messnerin", "arbeit", "familie", "liebe",
     "verbundenheit", "bergen", "dolomiten", "garten", "lägerle",
     "leidenschaft", "skifahren", "kindheit", "freundschaften",
@@ -190,11 +199,25 @@ def is_red(color_hex: Optional[str]) -> bool:
     return color_hex.upper() in RED_HEX_VALUES
 
 
+def is_green(color_hex: Optional[str]) -> bool:
+    """Prüft, ob eine Hex-Farbe als Kommentar-Grün gilt."""
+    if not color_hex:
+        return False
+    return color_hex.upper() in GREEN_HEX_VALUES
+
+
 def is_blue_bold_trigger(run: Run) -> bool:
     """Run ist ein Triggerwort, wenn er **fett UND in einer Blautönung** gesetzt ist."""
     if not run.bold:
         return False
     return is_blue(_color_hex(run))
+
+
+def is_green_bold_comment(run: Run) -> bool:
+    """Run ist ein geschützter Kommentar, wenn er fett und grün ist."""
+    if not run.bold:
+        return False
+    return is_green(_color_hex(run))
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +270,7 @@ def paragraph_to_tokens(paragraph: Paragraph, keep_existing_red: bool) -> List[T
             continue
         col = _color_hex(run)
         is_trigger = is_blue_bold_trigger(run)
+        is_green_comment = is_green_bold_comment(run)
         is_red_run = is_red(col)
         bold = bool(run.bold)
         for piece, kind in _split_run_text(text):
@@ -260,7 +284,7 @@ def paragraph_to_tokens(paragraph: Paragraph, keep_existing_red: bool) -> List[T
                 underline=run.underline,
             )
             if kind == "word":
-                if is_trigger:
+                if is_trigger or is_green_comment:
                     tok.locked = True
                 elif keep_existing_red and is_red_run:
                     tok.locked = True
@@ -269,7 +293,7 @@ def paragraph_to_tokens(paragraph: Paragraph, keep_existing_red: bool) -> List[T
             elif kind == "punct":
                 # Trigger-Punkte (z. B. „PAUSE.") sind selten – wir halten sie nicht
                 # zwingend fest, damit Satzzeichen ihrem Satz folgen können.
-                if is_trigger:
+                if is_trigger or is_green_comment:
                     tok.locked = True
             # Word kann ein sichtbares Wort intern in mehrere Runs zerlegen
             # (z. B. "Heut" + "e"). Ohne Zusammenführung würde nur ein Teil des
@@ -323,6 +347,10 @@ def _eligible_word(tok: Token, min_len: int) -> bool:
     """Wort ist Kandidat, wenn es lang genug und nicht gesperrt ist."""
     if tok.type != "word" or tok.locked:
         return False
+    if _is_year_or_number(tok.text):
+        return True
+    if tok.text[:1].isupper() and len(tok.text) >= 3 and _word_key(tok) not in BLUE_STOPWORDS:
+        return True
     return len(tok.text) >= min_len
 
 
@@ -330,6 +358,38 @@ def _word_key(tok_or_text: Token | str) -> str:
     """Normalisierte Wortform für heuristische Listen."""
     text = tok_or_text.text if isinstance(tok_or_text, Token) else tok_or_text
     return text.strip().lower()
+
+
+def _is_year_or_number(text: str) -> bool:
+    """Jahreszahlen und Zahlen sollen als sichere blaue Trigger möglich sein."""
+    cleaned = re.sub(r"[^\d]", "", text)
+    if not cleaned:
+        return False
+    if len(cleaned) == 4 and 1800 <= int(cleaned) <= 2099:
+        return True
+    return len(cleaned) >= 2 and text.replace(".", "").replace(",", "").isdigit()
+
+
+def _looks_like_name(tok: Token, token_idx: int, sentence_start_idx: Optional[int]) -> bool:
+    """Einfache Namens-Heuristik ohne KI.
+
+    Namen sind meist großgeschrieben. Am Satzanfang ist das unsicherer, daher
+    bekommen Satzanfänge nur dann Namensgewicht, wenn sie kurz/eindeutig wirken
+    oder in der bevorzugten Ankerliste stehen.
+    """
+    key = _word_key(tok)
+    if key in BLUE_STOPWORDS:
+        return False
+    if not tok.text[:1].isupper():
+        return False
+    if tok.text.isupper() and len(tok.text) <= 3:
+        return True
+    if len(tok.text) < 3:
+        return False
+    if sentence_start_idx is not None and token_idx == sentence_start_idx:
+        # Satzanfang: nur vorsichtig, sonst wird jedes erste Wort blau.
+        return key in PREFERRED_BLUE_ANCHORS or 3 <= len(tok.text) <= 8
+    return True
 
 
 def _is_blue_anchor_candidate(tok: Token, min_len: int) -> bool:
@@ -342,6 +402,10 @@ def _is_blue_anchor_candidate(tok: Token, min_len: int) -> bool:
         return False
     key = _word_key(tok)
     if key in PREFERRED_BLUE_ANCHORS:
+        return True
+    if _is_year_or_number(tok.text):
+        return True
+    if tok.text[:1].isupper() and len(tok.text) >= 3 and key not in BLUE_STOPWORDS:
         return True
     if key in BLUE_STOPWORDS:
         return False
@@ -443,6 +507,10 @@ def classify_candidates(
         tok = tokens[i]
         s = base_score(i)
         # Nomen/Eigennamen und lange zusammengesetzte Begriffe klar bevorzugen.
+        if _is_year_or_number(tok.text):
+            s += 8.0
+        if _looks_like_name(tok, i, sentence_start_idx):
+            s += 7.0
         if tok.text[:1].isupper():
             s += 4.0
         if tok.text.isupper():
@@ -482,6 +550,14 @@ def classify_candidates(
 
     # 1. Blau/fett: zentrale Hauptanker bei reinem Text erzeugen.
     blue_assigned: set[int] = set()
+    mandatory_blue = {
+        i for i in blue_candidates
+        if _is_year_or_number(tokens[i].text) or _word_key(tokens[i]) in PREFERRED_BLUE_ANCHORS
+    }
+    if mandatory_blue:
+        target_blue = max(target_blue, len(mandatory_blue))
+        blue_assigned.update(mandatory_blue)
+
     def has_adjacent_blue(i: int) -> bool:
         """Verhindert blaue Doppelanker direkt hintereinander."""
         if i in word_idxs:
@@ -495,6 +571,8 @@ def classify_candidates(
     for i in sorted(blue_candidates, key=blue_score, reverse=True):
         if len(blue_assigned) >= target_blue:
             break
+        if i in blue_assigned:
+            continue
         if has_adjacent_blue(i) and _word_key(tokens[i]) not in PREFERRED_BLUE_ANCHORS:
             continue
         blue_assigned.add(i)
@@ -740,6 +818,64 @@ def _apply_manuscript_paragraph_format(paragraph: Paragraph) -> None:
     paragraph.paragraph_format.space_after = Pt(SPEECH_SPACE_AFTER_PT)
 
 
+def _apply_document_page_setup(doc: Document) -> None:
+    """Setzt Papierformat und Seitenränder nach Kundenwunsch."""
+    for section in doc.sections:
+        section.page_width = Cm(PAGE_WIDTH_CM)
+        section.page_height = Cm(PAGE_HEIGHT_CM)
+        section.top_margin = Cm(PAGE_MARGIN_CM)
+        section.bottom_margin = Cm(PAGE_MARGIN_CM)
+        section.left_margin = Cm(PAGE_MARGIN_CM)
+        section.right_margin = Cm(PAGE_MARGIN_CM)
+
+
+def _is_star_separator(text: str) -> bool:
+    """Erkennt reine Sternchen-Trennzeilen."""
+    stripped = text.strip()
+    return len(stripped) >= 5 and set(stripped) == {"*"}
+
+
+def _find_star_block_indices(paragraphs: Sequence[Paragraph]) -> set[int]:
+    """Findet Absätze, die zu *...*-Einschüben gehören.
+
+    Beispiel:
+    *****************************************************
+    Intro: Andreas Gabalier…
+    *****************************************************
+
+    Der komplette Block wird von der normalen Wortmarkierung ausgenommen.
+    """
+    indices: set[int] = set()
+    i = 0
+    while i < len(paragraphs):
+        if not _is_star_separator(paragraphs[i].text):
+            i += 1
+            continue
+        end = None
+        for j in range(i + 1, min(len(paragraphs), i + 8)):
+            if _is_star_separator(paragraphs[j].text):
+                end = j
+                break
+        if end is not None:
+            indices.update(range(i, end + 1))
+            i = end + 1
+        else:
+            indices.add(i)
+            i += 1
+    return indices
+
+
+def _apply_star_block_format(paragraph: Paragraph) -> None:
+    """Formatiert Sternchen-Einschübe: einfach, fett, mittig."""
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    paragraph.paragraph_format.line_spacing = 1.0
+    paragraph.paragraph_format.space_before = Pt(0)
+    paragraph.paragraph_format.space_after = Pt(0)
+    for run in paragraph.runs:
+        run.bold = True
+        # Farbe bewusst nicht überschreiben, falls der Nutzer dort etwas markiert hat.
+
+
 def _insert_paragraph_after(paragraph: Paragraph) -> Paragraph:
     """Fügt direkt nach einem Absatz einen neuen Absatz mit kopierten Absatzformaten ein."""
     new_p = deepcopy(paragraph._p)
@@ -937,10 +1073,16 @@ def format_document(
     rng = random.Random(seed) if seed is not None else random.Random()
 
     doc = Document(src_path)
+    _apply_document_page_setup(doc)
 
     processed = 0
+    star_block_indices = _find_star_block_indices(doc.paragraphs)
     # 1) Top-Level-Absätze
-    for paragraph in doc.paragraphs:
+    for idx, paragraph in enumerate(doc.paragraphs):
+        if idx in star_block_indices:
+            _apply_star_block_format(paragraph)
+            processed += 1
+            continue
         if _process_paragraph(
             paragraph,
             min_len=min_len,
