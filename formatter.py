@@ -58,10 +58,13 @@ RED_RGB = RGBColor(0xFF, 0x00, 0x00)        # Rot für rot markierte Wörter
 BLUE_RGB = RGBColor(0x00, 0x00, 0xFF)       # Blau (nur falls Trigger neu erzeugt)
 BLACK_RGB = RGBColor(0x00, 0x00, 0x00)      # Schwarz (Standard)
 
-# Papierformat aus Kundenwunsch: 30 cm hoch x 22 cm breit, umlaufend 0,7 cm.
-PAGE_WIDTH_CM = 22.0
-PAGE_HEIGHT_CM = 30.0
+# Papierformat aus Kundenwunsch: 30 cm breit x 22 cm hoch, umlaufend 0,7 cm.
+PAGE_WIDTH_CM = 30.0
+PAGE_HEIGHT_CM = 22.0
 PAGE_MARGIN_CM = 0.7
+
+# Sternchen-Rubriken wie "Intro: ..." sollen größer gesetzt werden.
+STAR_BLOCK_TITLE_FONT_SIZE_PT = 16
 
 # Mindestlänge eines Worts, um überhaupt für rot/fett-schwarz infrage zu kommen.
 MIN_WORD_LEN_LOOSE = 3   # Modus „beispielnah"
@@ -131,6 +134,15 @@ PREFERRED_BLUE_ANCHORS = {
     "leidenschaft", "skifahren", "kindheit", "freundschaften",
     "einzelkind", "bodenständigkeit", "anliegen", "bursche", "bäume",
     "gelassenheit", "freunde",
+}
+
+MONTH_NAMES = {
+    "januar", "februar", "märz", "maerz", "april", "mai", "juni", "juli",
+    "august", "september", "oktober", "november", "dezember",
+}
+
+AGE_UNIT_WORDS = {
+    "jahr", "jahre", "jahren", "jährig", "jährige", "jährigen", "jähriger",
 }
 
 # Triggerwort-Marker: Wenn ein Run blau UND fett ist, gilt sein Text als Trigger.
@@ -370,6 +382,16 @@ def _is_year_or_number(text: str) -> bool:
     return len(cleaned) >= 2 and text.replace(".", "").replace(",", "").isdigit()
 
 
+def _is_month_name(text: str) -> bool:
+    """Erkennt ausgeschriebene Monatsnamen."""
+    return _word_key(text) in MONTH_NAMES
+
+
+def _is_age_unit_word(text: str) -> bool:
+    """Erkennt Wörter, die zusammen mit Zahlen Altersangaben bilden."""
+    return _word_key(text) in AGE_UNIT_WORDS
+
+
 def _looks_like_name(tok: Token, token_idx: int, sentence_start_idx: Optional[int]) -> bool:
     """Einfache Namens-Heuristik ohne KI.
 
@@ -550,9 +572,26 @@ def classify_candidates(
 
     # 1. Blau/fett: zentrale Hauptanker bei reinem Text erzeugen.
     blue_assigned: set[int] = set()
+    def near_number_word(i: int, radius: int = 2) -> bool:
+        """Prüft, ob in der Wortfolge nahe bei i eine Zahl/Jahreszahl steht."""
+        if i not in word_idxs:
+            return False
+        pos = word_idxs.index(i)
+        for other_pos in range(max(0, pos - radius), min(len(word_idxs), pos + radius + 1)):
+            if other_pos == pos:
+                continue
+            if _is_year_or_number(tokens[word_idxs[other_pos]].text):
+                return True
+        return False
+
     mandatory_blue = {
-        i for i in blue_candidates
-        if _is_year_or_number(tokens[i].text) or _word_key(tokens[i]) in PREFERRED_BLUE_ANCHORS
+        i for i in word_idxs
+        if (
+            _is_year_or_number(tokens[i].text)
+            or _word_key(tokens[i]) in PREFERRED_BLUE_ANCHORS
+            or (_is_month_name(tokens[i].text) and near_number_word(i, radius=2))
+            or (_is_age_unit_word(tokens[i].text) and near_number_word(i, radius=1))
+        )
     }
     if mandatory_blue:
         target_blue = max(target_blue, len(mandatory_blue))
@@ -866,13 +905,19 @@ def _find_star_block_indices(paragraphs: Sequence[Paragraph]) -> set[int]:
 
 
 def _apply_star_block_format(paragraph: Paragraph) -> None:
-    """Formatiert Sternchen-Einschübe: einfach, fett, mittig."""
+    """Formatiert Sternchen-Einschübe: einfach, fett, mittig.
+
+    Die eigentliche Rubrikzeile zwischen den Sternchen wird zusätzlich auf
+    16 pt gesetzt; die Sternchen-Trennlinien bleiben in der bestehenden Größe.
+    """
     paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
     paragraph.paragraph_format.line_spacing = 1.0
     paragraph.paragraph_format.space_before = Pt(0)
     paragraph.paragraph_format.space_after = Pt(0)
     for run in paragraph.runs:
         run.bold = True
+        if not _is_star_separator(paragraph.text):
+            run.font.size = Pt(STAR_BLOCK_TITLE_FONT_SIZE_PT)
         # Farbe bewusst nicht überschreiben, falls der Nutzer dort etwas markiert hat.
 
 
