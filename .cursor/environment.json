@@ -1,0 +1,17 @@
+{
+  "name": "Leseformatierer",
+  "install": "sudo apt-get update && sudo apt-get install -y python3.12-venv && python3 -m venv .venv && . .venv/bin/activate && pip install --upgrade pip && pip install -r requirements.txt",
+  "terminals": [
+    {
+      "name": "web",
+      "command": ". .venv/bin/activate && gunicorn app:app --bind 0.0.0.0:5000 --workers 2 --timeout 120",
+      "description": "Flask/gunicorn web server for the Leseformatierer app on port 5000."
+    }
+  ],
+  "ports": [
+    {
+      "name": "web server",
+      "port": 5000
+    }
+  ]
+}

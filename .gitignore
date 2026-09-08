@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# App runtime directories
+uploads/
+outputs/
+
+# Generated / test artifacts
+test_input.docx
+test_output.docx
+formatted_via_http.docx
+*.egg-info/
